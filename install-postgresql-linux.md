@@ -52,75 +52,93 @@ Test the login:
 psql -h 127.0.0.1 -U app_user -d app_db
 ```
 
-If the password prompt fails on a local connection, the server is still using peer or ident authentication for local sockets. Connect as the `postgres` user with `sudo -u postgres psql`, or follow the authentication section below.
-
-## Allow password login from localhost
-
-Edit the host-based authentication file. The path includes the major version, for example `16`:
-
-```bash
-sudo -u postgres psql -c "SHOW hba_file;"
-```
-
-Open the file that command prints. For application connections over TCP, use a `scram-sha-256` line **above** any broader `ident` or `peer` lines:
-
-```text
-# TYPE  DATABASE  USER      ADDRESS         METHOD
-host    app_db    app_user  127.0.0.1/32    scram-sha-256
-host    app_db    app_user  ::1/128         scram-sha-256
-```
-
-Set the password encryption method and reload:
-
-```bash
-sudo -u postgres psql -c "ALTER SYSTEM SET password_encryption = 'scram-sha-256';"
-sudo systemctl reload postgresql
-```
-
-Set the user password again so it is stored with SCRAM:
-
-```bash
-sudo -u postgres psql -c "ALTER USER app_user WITH PASSWORD 'replace-with-a-strong-password';"
-```
+If the password prompt fails on a local connection, the server is still using peer or ident authentication for local sockets. Connect as the `postgres` user with `sudo -u postgres psql`.
 
 ## Remote access
 
-Skip this section if the application runs on the same server. PostgreSQL listens only on localhost until you change it.
+### Step 1: Enable public connections
 
-1. Allow the server to listen on the network interface:
+```bash
+sudo nano /etc/postgresql/16/main/postgresql.conf
+```
 
-   ```bash
-   sudo -u postgres psql -c "ALTER SYSTEM SET listen_addresses = '*';"
-   ```
+Find:
 
-   Use a specific address, such as `'10.0.0.10'`, when the server has more than one interface.
+```text
+#listen_addresses = 'localhost'
+```
 
-2. Add a client rule in `pg_hba.conf` for the application network only. Example for a single application host:
+Change to:
 
-   ```text
-   host    app_db    app_user    10.0.0.20/32    scram-sha-256
-   ```
+```text
+listen_addresses = '*'
+```
 
-   Do not use `0.0.0.0/0` on a server that is reachable from the public internet.
+### Step 2: Allow remote connections
 
-3. Reload PostgreSQL:
+```bash
+sudo nano /etc/postgresql/16/main/pg_hba.conf
+```
 
-   ```bash
-   sudo systemctl reload postgresql
-   ```
+Add this at the bottom if you want to allow a specific IP:
 
-4. Open port `5432` for that client address with `ufw`:
+```text
+host    evolva_billing    postgres    YOUR_PUBLIC_IP/32    scram-sha-256
+```
 
-   ```bash
-   sudo ufw allow from 10.0.0.20 to any port 5432 proto tcp
-   sudo ufw status
-   ```
+If you want all IP access, add this instead:
 
-5. From the application host:
+```text
+host    all    all    0.0.0.0/0    scram-sha-256
+```
 
-   ```bash
-   psql "host=SERVER_IP port=5432 dbname=app_db user=app_user"
-   ```
+This allows password-authenticated connections for all databases and users from any IP address.
+
+If you also want IPv6 connections, add:
+
+```text
+host    all    all    ::/0    scram-sha-256
+```
+
+### Step 3: Open port 5432
+
+Run:
+
+```bash
+sudo ufw allow 5432/tcp
+```
+
+Check:
+
+```bash
+sudo ufw status
+```
+
+Also allow TCP port 5432 in your hosting provider's firewall/security rules.
+
+### Step 4: Restart PostgreSQL
+
+```bash
+sudo systemctl restart postgresql
+```
+
+Check:
+
+```bash
+sudo systemctl status postgresql
+```
+
+### Step 5: Verify PostgreSQL is listening publicly
+
+```bash
+sudo ss -lntp | grep 5432
+```
+
+Expected output should contain:
+
+```text
+0.0.0.0:5432
+```
 
 ## Install a specific major version
 
@@ -146,7 +164,7 @@ Change `16` to the major version you need. The service name stays `postgresql`.
 
 ## Notes
 
-- Keep the database on a private network. Expose port `5432` only to the application hosts that need it.
+- Port `5432` is open to any address. Use a strong password, and allow TCP port `5432` in the hosting provider firewall as well.
 - Store the application password in the application secret store, not in shell history or this document.
 - Take a backup before upgrades. A logical dump of one database:
 
